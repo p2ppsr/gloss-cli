@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { GlossClient } from "gloss-logs";
+import { GlossClient } from "gloss-client";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { lookup as mimeLookup } from "mime-types";
@@ -15,8 +15,7 @@ program.name("gloss").description("build. log. ship.").version("0.1.0");
 const config = loadConfig();
 const gloss = new GlossClient({
   networkPreset: config.networkPreset,
-  walletHost: config.walletHost,
-  walletMode: config.walletMode
+  walletMode: 'local'
 });
 
 program
@@ -201,40 +200,19 @@ program
 
 program
   .command("remove")
-  .description("remove a specific log entry")
-  .argument("<key>", "log key (YYYY-MM-DD/HHmmss-mmm) or date (YYYY-MM-DD) with text")
-  .argument("[text]", "exact text of the entry to remove (only needed if using date format)")
-  .action(async (key: string, text?: string) => {
+  .description("remove a specific log entry by its unique key")
+  .argument("<logKey>", "full log key (YYYY-MM-DD/HHmmss-SSSxxxx)")
+  .action(async (logKey: string) => {
     process.stdout.write("🗑️  Removing log... ");
 
     try {
-      let removed: boolean;
-
-      if (key.includes('/') && !text) {
-        // New format: remove by unique key
-        removed = await gloss.removeEntry(key);
-      } else if (text) {
-        // Old format: remove by date + text
-        removed = await gloss.removeEntry(key, text);
-      } else {
-        process.stdout.write("\r");
-        console.error(`❌ Invalid format. Use either:`);
-        console.error(`   gloss remove 2025-10-07/143022-456`);
-        console.error(`   gloss remove 2025-10-07 "exact text"`);
-        process.exit(1);
-      }
+      const removed = await gloss.removeEntry(logKey);
 
       process.stdout.write("\r");
       if (removed) {
-        if (key.includes('/') && !text) {
-          console.log(`✅ Removed entry: ${key}`);
-        } else {
-          console.log(`✅ Removed entry: "${text}"`);
-          console.log(`📅 Date: ${key}`);
-        }
+        console.log(`✅ Removed entry: ${logKey}`);
       } else {
-        console.log(`❌ Entry not found: "${text}"`);
-        console.log(`📅 Date: ${key}`);
+        console.log(`❌ Entry not found: ${logKey}`);
         console.log(`💡 Tip: You can only remove your own entries`);
       }
     } catch (error) {
@@ -278,31 +256,27 @@ program
 
 program
   .command("update")
-  .description("update a specific log entry")
-  .argument("<date>", "date (YYYY-MM-DD)")
-  .argument("<oldText>", "current text of the entry to update")
+  .description("update a specific log entry by its unique key")
+  .argument("<logKey>", "full log key (YYYY-MM-DD/HHmmss-SSSxxxx)")
   .argument("<newText>", "new text for the entry")
   .option("-t, --tags <csv>", "new tags for the entry")
-  .action(async (date: string, oldText: string, newText: string, opts) => {
+  .action(async (logKey: string, newText: string, opts) => {
     const tags = (opts.tags ? String(opts.tags).split(",") : undefined)?.map((s: string) => s.trim()).filter(Boolean);
 
     process.stdout.write("✏️  Updating on blockchain... ");
 
     try {
-      const updatedEntry = await gloss.updateEntry(date, oldText, newText, { tags });
+      const updatedEntry = await gloss.updateEntryByKey(logKey, newText, { tags });
 
       process.stdout.write("\r");
       if (updatedEntry) {
-        console.log(`✅ Updated entry`);
-        console.log(`📅 Date: ${date}`);
-        console.log(`📝 Old: "${oldText}"`);
+        console.log(`✅ Updated entry: ${logKey}`);
         console.log(`📝 New: "${newText}"`);
         if (tags?.length) {
           console.log(`🏷️  Tags: [${tags.join(",")}]`);
         }
       } else {
-        console.log(`❌ Entry not found: "${oldText}"`);
-        console.log(`📅 Date: ${date}`);
+        console.log(`❌ Entry not found: ${logKey}`);
         console.log(`💡 Tip: You can only update your own entries`);
       }
     } catch (error) {
