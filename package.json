@@ -1,6 +1,6 @@
 {
   "name": "gloss-cli",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Global developer logging CLI.",
   "type": "module",
   "bin": {
