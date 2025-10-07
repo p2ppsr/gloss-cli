@@ -97,7 +97,7 @@ gloss history 2025-10-07/143022-456
 - No local files - everything on BSV blockchain
 
 ### Benefits
-- ✅ **Parallel Logging**: Multiple logs can be created simultaneously
+- ✅ **Individual UTXOs**: Each log is its own spendable transaction
 - ✅ **Granular Removal**: Delete specific entries without affecting others  
 - ✅ **Update History**: Complete audit trail of all changes
 - ✅ **Global Discovery**: All developers' logs discoverable via protocol ID
