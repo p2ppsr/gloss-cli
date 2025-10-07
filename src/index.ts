@@ -1,13 +1,23 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { uploadBytes } from "./uploader.js";
+import { GlossClient } from "gloss-logs";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { lookup as mimeLookup } from "mime-types";
-import { nextIdForDay, putEntry, listDay, getEntry } from "./kv.js";
+import { loadConfig } from "./config.js";
+import crypto from 'crypto'
+(global as any).self = { crypto }
 
 const program = new Command();
-program.name("gloss").description("tiny developer log").version("0.1.0");
+program.name("gloss").description("build. log. ship.").version("0.1.0");
+
+// Initialize gloss client with config
+const config = loadConfig();
+const gloss = new GlossClient({
+  networkPreset: config.networkPreset,
+  walletHost: config.walletHost,
+  walletMode: config.walletMode
+});
 
 program
   .command("log")
@@ -18,24 +28,15 @@ program
     const text = String(message.join(" "));
     const tags = (opts.tags ? String(opts.tags).split(",") : []).map((s: string) => s.trim()).filter(Boolean);
 
-    const day = new Date().toISOString().slice(0, 10);
-    const key = await nextIdForDay(day); // This now returns the day itself
-
     // Show loading indicator
     process.stdout.write("📝 Logging to blockchain... ");
-    
+
     try {
-      await putEntry({
-        key,
-        at: new Date().toISOString(),
-        text,
-        tags,
-        assets: []
-      });
+      const entry = await gloss.log(text, { tags });
 
       // Clear loading line and show success
       process.stdout.write("\r");
-      console.log(`Logged ✓  Key: ${key}`);
+      console.log(`Logged ✓  Key: ${entry.key}`);
       console.log(`Message: ${text}`);
       if (tags.length) {
         console.log(`Tags: [${tags.join(",")}]`);
@@ -56,38 +57,28 @@ program
   .action(async (path: string, opts) => {
     const buf = await readFile(path);
     const mime = String(mimeLookup(path) || "application/octet-stream");
-    
-    // Upload asset first
-    process.stdout.write("📤 Uploading to UHRP... ");
-    const { uhrpURL } = await uploadBytes(new Uint8Array(buf), mime);
-    process.stdout.write("✓\n");
-    
     const caption = String(opts.caption ?? "");
-    const day = new Date().toISOString().slice(0, 10);
-    const key = await nextIdForDay(day); // This now returns the day itself
-    const text = `asset ${basename(path)} -> ${uhrpURL}${caption ? ` (${caption})` : ""}`;
 
-    // Log to blockchain
-    process.stdout.write("📝 Logging to blockchain... ");
-    
+    // Upload and log in one operation
+    process.stdout.write("📤 Uploading to UHRP... ");
+
     try {
-      await putEntry({
-        key,
-        at: new Date().toISOString(),
-        text,
+      const text = `asset ${basename(path)}${caption ? ` (${caption})` : ""}`;
+      const entry = await gloss.logWithAsset(text, new Uint8Array(buf), mime, {
         tags: ["asset"],
-        assets: [uhrpURL]
+        retentionMinutes: config.retentionMinutes,
+        storageURL: config.uhrpURL
       });
 
       // Clear loading line and show success
       process.stdout.write("\r");
-      console.log(`Uploaded ✓  ${uhrpURL}`);
-      console.log(`Logged ✓   Key: ${key}`);
+      console.log(`Uploaded ✓  ${entry.assets?.[0]}`);
+      console.log(`Logged ✓   Key: ${entry.key}`);
       console.log(`Caption: ${caption || "none"}`);
     } catch (error) {
       // Clear loading line and show error
       process.stdout.write("\r");
-      console.error(`❌ Failed to log: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`❌ Failed to upload/log: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
     }
   });
@@ -96,22 +87,32 @@ program
   .command("list")
   .description("list entries for a specific day")
   .argument("<yyyy-mm-dd>", "date to list entries for")
-  .action(async (day: string) => {
-    const rows = await listDay(day);
+  .option("--tags <csv>", "filter by tags (comma-separated)")
+  .option("--controller <pubkey>", "filter by specific controller")
+  .option("--limit <number>", "limit number of results", (val) => parseInt(val))
+  .action(async (day: string, opts) => {
+    const tags = opts.tags ? opts.tags.split(",").map((s: string) => s.trim()).filter(Boolean) : undefined;
+    const controller = opts.controller || undefined;
+    const limit = opts.limit || undefined;
+
+    const rows = await gloss.listDay(day, { tags, controller, limit });
     if (!rows.length) {
-      console.log(`No entries found for ${day}`);
+      const filterStr = tags ? ` with tags [${tags.join(",")}]` : "";
+      console.log(`No entries found for ${day}${filterStr}`);
       return;
     }
 
-    console.log(`\n📝 Entries for ${day}:`);
+    const filterStr = tags ? ` (filtered by tags: ${tags.join(",")})` : "";
+    console.log(`\n📝 Entries for ${day}${filterStr}:`);
     console.log("─".repeat(50));
 
     for (const r of rows) {
       const date = new Date(r.at);
       const timeStr = date.toTimeString().slice(0, 5);
       const tagStr = r.tags?.length ? ` [${r.tags.join(",")}]` : "";
+      const controllerStr = r.controller ? ` (${r.controller.slice(0, 8)}...)` : "";
 
-      console.log(`${timeStr} ${r.key}${tagStr}`);
+      console.log(`${timeStr} ${r.key}${tagStr}${controllerStr}`);
       console.log(`  ${r.text}`);
 
       if (r.assets?.length) {
@@ -125,55 +126,68 @@ program
 
 program
   .command("get")
-  .description("get a specific entry by key")
-  .argument("<key>", "entry key (YYYY-MM-DD/NNNN)")
+  .description("get all log entries for a date")
+  .argument("<key>", "date key (YYYY-MM-DD)")
   .action(async (key: string) => {
-    const entry = await getEntry(key);
-    if (!entry) {
-      console.error(`❌ Entry not found: ${key}`);
+    const entries = await gloss.get(key);
+    if (!entries || entries.length === 0) {
+      console.error(`❌ No entries found for: ${key}`);
       process.exit(1);
     }
 
-    const date = new Date(entry.at);
-    const timeStr = date.toTimeString().slice(0, 5);
-    const tagStr = entry.tags?.length ? ` [${entry.tags.join(",")}]` : "";
+    console.log(`\n📝 Log Entries: ${key}`);
+    console.log(`📊 Total logs: ${entries.length}`);
+    console.log("─".repeat(50));
 
-    console.log(`\n📝 Entry: ${entry.key}`);
-    console.log(`⏰ Time: ${timeStr} (${entry.at})`);
-    console.log(`💬 Text: ${entry.text}`);
+    for (const entry of entries) {
+      const date = new Date(entry.at);
+      const timeStr = date.toTimeString().slice(0, 5);
+      const tagStr = entry.tags?.length ? ` [${entry.tags.join(",")}]` : "";
+      const controllerStr = entry.controller ? ` (${entry.controller.slice(0, 8)}...)` : "";
 
-    if (entry.tags?.length) {
-      console.log(`🏷️  Tags: ${entry.tags.join(", ")}`);
-    }
+      console.log(`${timeStr} ${entry.key}${tagStr}${controllerStr}`);
+      console.log(`  ${entry.text}`);
 
-    if (entry.assets?.length) {
-      console.log(`📎 Assets:`);
-      for (const asset of entry.assets) {
-        console.log(`   ${asset}`);
+      if (entry.assets?.length) {
+        for (const asset of entry.assets) {
+          console.log(`  📎 ${asset}`);
+        }
       }
+      console.log();
     }
   });
 
 program
   .command("today")
   .description("list today's entries")
-  .action(async () => {
+  .option("--tags <csv>", "filter by tags (comma-separated)")
+  .option("--controller <pubkey>", "filter by specific controller")
+  .option("--limit <number>", "limit number of results", (val) => parseInt(val))
+  .action(async (opts) => {
+    const tags = opts.tags ? opts.tags.split(",").map((s: string) => s.trim()).filter(Boolean) : undefined;
+    const controller = opts.controller || undefined;
+    const limit = opts.limit || undefined;
+
+    const rows = await gloss.listToday({ tags, controller, limit });
     const today = new Date().toISOString().slice(0, 10);
-    const rows = await listDay(today);
+
     if (!rows.length) {
-      console.log(`No entries found for today (${today})`);
+      const filterStr = tags ? ` with tags [${tags.join(",")}]` : "";
+      console.log(`No entries found for today (${today})${filterStr}`);
       return;
     }
 
-    console.log(`\n📝 Today's entries (${today}):`);
+    const filterStr = tags ? ` (filtered by tags: ${tags.join(",")})` : "";
+    console.log(`\n📝 Today's entries (${today})${filterStr}:`);
     console.log("─".repeat(50));
 
     for (const r of rows) {
       const date = new Date(r.at);
       const timeStr = date.toTimeString().slice(0, 5);
       const tagStr = r.tags?.length ? ` [${r.tags.join(",")}]` : "";
+      const controllerStr = r.controller ? ` (${r.controller.slice(0, 8)}...)` : "";
 
-      console.log(`${timeStr} ${r.key}${tagStr}`);
+      console.log(`${timeStr} ${r.key}${tagStr}${controllerStr}`);
       console.log(`  ${r.text}`);
 
       if (r.assets?.length) {
@@ -185,4 +199,156 @@ program
     }
   });
 
-program.parseAsync(process.argv);
+program
+  .command("remove")
+  .description("remove a specific log entry")
+  .argument("<key>", "log key (YYYY-MM-DD/HHmmss-mmm) or date (YYYY-MM-DD) with text")
+  .argument("[text]", "exact text of the entry to remove (only needed if using date format)")
+  .action(async (key: string, text?: string) => {
+    process.stdout.write("🗑️  Removing log... ");
+
+    try {
+      let removed: boolean;
+
+      if (key.includes('/') && !text) {
+        // New format: remove by unique key
+        removed = await gloss.removeEntry(key);
+      } else if (text) {
+        // Old format: remove by date + text
+        removed = await gloss.removeEntry(key, text);
+      } else {
+        process.stdout.write("\r");
+        console.error(`❌ Invalid format. Use either:`);
+        console.error(`   gloss remove 2025-10-07/143022-456`);
+        console.error(`   gloss remove 2025-10-07 "exact text"`);
+        process.exit(1);
+      }
+
+      process.stdout.write("\r");
+      if (removed) {
+        if (key.includes('/') && !text) {
+          console.log(`✅ Removed entry: ${key}`);
+        } else {
+          console.log(`✅ Removed entry: "${text}"`);
+          console.log(`📅 Date: ${key}`);
+        }
+      } else {
+        console.log(`❌ Entry not found: "${text}"`);
+        console.log(`📅 Date: ${key}`);
+        console.log(`💡 Tip: You can only remove your own entries`);
+      }
+    } catch (error) {
+      process.stdout.write("\r");
+      console.error(`❌ Failed to remove: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("remove-day")
+  .description("remove all your log entries for a specific date")
+  .argument("<date>", "date (YYYY-MM-DD)")
+  .option("--confirm", "confirm deletion (required)")
+  .action(async (date: string, opts) => {
+    if (!opts.confirm) {
+      console.error("❌ This will remove ALL your logs for this date!");
+      console.error("💡 Add --confirm flag to proceed: gloss remove-day 2025-10-07 --confirm");
+      process.exit(1);
+    }
+
+    process.stdout.write("🗑️  Removing day-logs... ");
+
+    try {
+      const removed = await gloss.removeDay(date);
+
+      process.stdout.write("\r");
+      if (removed) {
+        console.log(`✅ Removed all entries for ${date}`);
+        console.log(`📅 Your entire day chain has been deleted`);
+      } else {
+        console.log(`❌ No entries found for ${date}`);
+        console.log(`💡 Tip: You can only remove your own entries`);
+      }
+    } catch (error) {
+      process.stdout.write("\r");
+      console.error(`❌ Failed to remove day: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("update")
+  .description("update a specific log entry")
+  .argument("<date>", "date (YYYY-MM-DD)")
+  .argument("<oldText>", "current text of the entry to update")
+  .argument("<newText>", "new text for the entry")
+  .option("-t, --tags <csv>", "new tags for the entry")
+  .action(async (date: string, oldText: string, newText: string, opts) => {
+    const tags = (opts.tags ? String(opts.tags).split(",") : undefined)?.map((s: string) => s.trim()).filter(Boolean);
+
+    process.stdout.write("✏️  Updating on blockchain... ");
+
+    try {
+      const updatedEntry = await gloss.updateEntry(date, oldText, newText, { tags });
+
+      process.stdout.write("\r");
+      if (updatedEntry) {
+        console.log(`✅ Updated entry`);
+        console.log(`📅 Date: ${date}`);
+        console.log(`📝 Old: "${oldText}"`);
+        console.log(`📝 New: "${newText}"`);
+        if (tags?.length) {
+          console.log(`🏷️  Tags: [${tags.join(",")}]`);
+        }
+      } else {
+        console.log(`❌ Entry not found: "${oldText}"`);
+        console.log(`📅 Date: ${date}`);
+        console.log(`💡 Tip: You can only update your own entries`);
+      }
+    } catch (error) {
+      process.stdout.write("\r");
+      console.error(`❌ Failed to update: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("history")
+  .description("view the full history of a specific log entry")
+  .argument("<logKey>", "full log key (YYYY-MM-DD/HHmmss-mmm)")
+  .action(async (logKey: string) => {
+    try {
+      const history = await gloss.getLogHistory(logKey);
+
+      if (history.length === 0) {
+        console.log(`❌ No history found for: ${logKey}`);
+        return;
+      }
+
+      console.log(`\n📚 History for: ${logKey}`);
+      console.log(`📊 Total versions: ${history.length}`);
+      console.log("─".repeat(50));
+
+      history.forEach((entry, index: number) => {
+        const date = new Date(entry.at);
+        const timeStr = date.toTimeString().slice(0, 8);
+        const tagStr = entry.tags?.length ? ` [${entry.tags.join(',')}]` : '';
+        const versionLabel = index === 0 ? ' (current)' : ` (v${history.length - index})`;
+
+        console.log(`${timeStr}${versionLabel}${tagStr}`);
+        console.log(`  ${entry.text}`);
+
+        if (entry.assets?.length) {
+          for (const asset of entry.assets) {
+            console.log(`  📎 ${asset}`);
+          }
+        }
+        console.log();
+      });
+    } catch (error) {
+      console.error(`❌ Failed to get history: ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    }
+  });
+
+program.parse();

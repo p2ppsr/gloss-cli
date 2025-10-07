@@ -1,7 +1,7 @@
 {
   "name": "gloss-cli",
-  "version": "0.1.0",
-  "description": "build. log. ship.",
+  "version": "0.2.2",
+  "description": "Global developer logging CLI.",
   "type": "module",
   "bin": {
     "gloss": "./dist/index.js"
@@ -14,6 +14,7 @@
   "dependencies": {
     "@bsv/sdk": "^1.8.2",
     "commander": "^12.1.0",
+    "gloss-logs": "^0.4.1",
     "mime-types": "^2.1.35"
   },
   "devDependencies": {
