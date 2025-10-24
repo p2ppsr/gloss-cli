@@ -14,7 +14,7 @@
   "dependencies": {
     "@bsv/sdk": "^1.8.8",
     "commander": "^12.1.0",
-    "gloss-client": "^0.4.6",
+    "gloss-client": "^0.4.8",
     "mime-types": "^2.1.35"
   },
   "devDependencies": {
