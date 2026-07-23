@@ -2,9 +2,10 @@
 
 Global developer logging CLI.
 
-Zero‑friction dev logs from your terminal. Write a line, paste a screenshot, and hit enter. 
-Images are uploaded to UHRP via `@bsv/sdk`'s `StorageUploader`. All entries are stored using `GlobalKVStore` 
-with each log as an individual spendable UTXO for true blockchain semantics.
+Zero-friction dev logs from your terminal. Write a line, paste a screenshot,
+and hit enter. Images are uploaded to UHRP via `@bsv/sdk`'s
+`StorageUploader`. Entries are stored in `GlobalKVStore` using one active
+token per controller and local calendar day.
 
 ## Quick start
 
@@ -30,7 +31,7 @@ gloss snap ./screens/trace.png -c "latency spike around 14:27"
 # View today's logs
 gloss today
 
-# Remove a specific log by unique key
+# Legacy removal currently advances/removes the whole day token
 gloss remove 2025-10-07/143022-456
 
 # Update a log entry
@@ -42,11 +43,16 @@ gloss history 2025-10-07/143022-456
 > Uploads require a compatible wallet endpoint (per `@bsv/sdk`) reachable at `WALLET_HOST`.
 > If not available, `snap` will fail gracefully.
 
+Normal commands report only their final result. Individual overlay-host errors
+that the SDK encounters while retrying or reconciling a successful operation
+are intentionally hidden. If the operation ultimately fails, Gloss exits
+nonzero and prints one concise error.
+
 ## Commands
 
 ### Core Logging
 - `gloss log "<message>" [-t csvTags]`  
-  Creates a new log entry with timestamp and optional tags. Each log gets a unique UTXO.
+  Appends a timestamped entry to the controller's day-token spend chain.
 
 - `gloss snap <path> [-c caption]`  
   Uploads file to UHRP and creates a log entry with the UHRP URL.
@@ -62,8 +68,9 @@ gloss history 2025-10-07/143022-456
   Retrieves all entries for a specific date.
 
 ### Log Management
-- `gloss remove <key-or-date> [text]`  
-  Remove a log by unique key (`2025-10-07/143022-456`) or date + text.
+- `gloss remove <key>`
+  Legacy compatibility command. With the day-token architecture this currently
+  removes the controller's whole day token, not only the logical entry.
 
 - `gloss remove-day <YYYY-MM-DD> [--confirm]`  
   Remove all your log entries for a specific date.
@@ -84,22 +91,28 @@ gloss history 2025-10-07/143022-456
 
 ## Architecture
 
-### Individual UTXO Design
-- **Each log = Individual UTXO**: Every log entry creates its own spendable transaction
-- **Unique Keys**: Logs have timestamped keys like `2025-10-07/143022-456`
-- **Granular Operations**: Remove, update, or query individual logs without affecting others
-- **True Blockchain Semantics**: Leverage spend chains for audit trails and history
+### Day-Token Spend Chain
+
+- **One active day token**: A controller has one active GlobalKVStore token for
+  each local calendar day.
+- **Spend-chain history**: Each write spends the previous day token. Reads use
+  `history: true` to reconstruct the day's prior entries.
+- **Logical identity**: An entry is identified by its controller and timestamped
+  key, such as `2025-10-07/143022-456`, not by a transaction ID.
+- **Exact transaction metadata**: A TXID is shown only when the storage response
+  identifies the transaction for that exact value.
 
 ### Data Storage
 - All data stored in `GlobalKVStore` with protocol ID `[1, 'gloss logs']`
-- Keys format: `entry/YYYY-MM-DD/HHmmss-mmm`
-- Updates create spend chains preserving complete history
+- Day keys use `entry/YYYY-MM-DD`; log values retain timestamped logical keys.
+- Writes and updates advance the day-token spend chain.
 - No local files - everything on BSV blockchain
 
 ### Benefits
-- **Individual UTXOs**: Each log is its own spendable transaction
-- **Granular Removal**: Delete specific entries without affecting others  
-- **Update History**: Complete audit trail of all changes
+- **Native history**: Bitcoin's chain of spends provides the ordered history.
+- **Stable logical entries**: Multiple posts from one day remain distinct even
+  when historical transaction metadata is unavailable.
+- **Update history**: Entry revisions are reconstructed from spend history.
 - **Global Discovery**: All developers' logs discoverable via protocol ID
 
 ## License

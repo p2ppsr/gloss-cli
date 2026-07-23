@@ -2,14 +2,18 @@
 import { Command } from "commander";
 import { GlossClient } from "gloss-client";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { basename } from "node:path";
 import { lookup as mimeLookup } from "mime-types";
 import { loadConfig } from "./config.js";
+import { withQuietSdkOutput } from "./quiet-sdk-output.js";
 import crypto from 'crypto'
 (global as any).self = { crypto }
 
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json") as { version: string };
 const program = new Command();
-program.name("gloss").description("build. log. ship.").version("0.1.0");
+program.name("gloss").description("build. log. ship.").version(version);
 
 // Initialize gloss client with config
 const config = loadConfig();
@@ -31,7 +35,7 @@ program
     process.stdout.write("📝 Logging to blockchain... ");
 
     try {
-      const entry = await gloss.log(text, { tags });
+      const entry = await withQuietSdkOutput(() => gloss.log(text, { tags }));
 
       // Clear loading line and show success
       process.stdout.write("\r");
@@ -63,11 +67,11 @@ program
 
     try {
       const text = `asset ${basename(path)}${caption ? ` (${caption})` : ""}`;
-      const entry = await gloss.logWithAsset(text, new Uint8Array(buf), mime, {
+      const entry = await withQuietSdkOutput(() => gloss.logWithAsset(text, new Uint8Array(buf), mime, {
         tags: ["asset"],
         retentionMinutes: config.retentionMinutes,
         storageURL: config.uhrpURL
-      });
+      }));
 
       // Clear loading line and show success
       process.stdout.write("\r");
@@ -206,7 +210,7 @@ program
     process.stdout.write("🗑️  Removing log... ");
 
     try {
-      const removed = await gloss.removeEntry(logKey);
+      const removed = await withQuietSdkOutput(() => gloss.removeEntry(logKey));
 
       process.stdout.write("\r");
       if (removed) {
@@ -237,7 +241,7 @@ program
     process.stdout.write("🗑️  Removing day-logs... ");
 
     try {
-      const removed = await gloss.removeDay(date);
+      const removed = await withQuietSdkOutput(() => gloss.removeDay(date));
 
       process.stdout.write("\r");
       if (removed) {
@@ -266,7 +270,9 @@ program
     process.stdout.write("✏️  Updating on blockchain... ");
 
     try {
-      const updatedEntry = await gloss.updateEntryByKey(logKey, newText, { tags });
+      const updatedEntry = await withQuietSdkOutput(
+        () => gloss.updateEntryByKey(logKey, newText, { tags })
+      );
 
       process.stdout.write("\r");
       if (updatedEntry) {

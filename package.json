@@ -1,20 +1,27 @@
 {
   "name": "gloss-cli",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Global developer logging CLI.",
   "type": "module",
   "bin": {
     "gloss": "./dist/index.js"
   },
+  "files": [
+    "dist/config.js",
+    "dist/index.js",
+    "dist/quiet-sdk-output.js",
+    "README.md"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@bsv/sdk": "^2.1.7",
+    "@bsv/sdk": "2.1.9",
     "commander": "^12.1.0",
-    "gloss-client": "^0.4.11",
+    "gloss-client": "https://github.com/p2ppsr/gloss-client/releases/download/v0.4.12/gloss-client-0.4.12.tgz",
     "mime-types": "^2.1.35"
   },
   "devDependencies": {
